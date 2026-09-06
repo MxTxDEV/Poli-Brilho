@@ -1,30 +1,20 @@
-"use client";
-
-import { useEffect, useRef } from "react";
-import { useFrameCanvas } from "@/hooks/useFrameCanvas";
 import Reveal from "@/components/Reveal";
 import { whatsappLink } from "@/lib/contact";
 
 const CTA_LINK = whatsappLink("Olá! Quero experimentar o Sabão Polibrilho.");
-const CTA_SHOT_FRAME = 130;
 
 export default function CTA() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const renderFrame = useFrameCanvas(canvasRef);
-
-  useEffect(() => {
-    renderFrame(CTA_SHOT_FRAME);
-  }, [renderFrame]);
-
   return (
     <section
       id="contato"
       className="relative flex min-h-[85vh] w-full items-center justify-center overflow-hidden border-t border-line bg-bg px-6 py-28 text-center"
     >
-      <canvas
-        ref={canvasRef}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/product/photos/pote-real.webp"
+        alt=""
         aria-hidden="true"
-        className="absolute inset-0 h-full w-full opacity-40"
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[130%] w-auto -translate-x-1/2 -translate-y-1/2 opacity-[0.07] blur-[2px]"
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-bg via-bg/70 to-bg" />
 

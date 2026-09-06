@@ -1,34 +1,22 @@
-"use client";
-
-import { useEffect, useRef } from "react";
 import { MessageCircle } from "lucide-react";
-import { useFrameCanvas } from "@/hooks/useFrameCanvas";
 import Reveal from "@/components/Reveal";
 import { INSTAGRAM_HANDLE, WHATSAPP_DISPLAY, whatsappLink } from "@/lib/contact";
 
 const WHATSAPP_LINK = whatsappLink("Olá! Quero comprar o Sabão Polibrilho.");
-const PRODUCT_SHOT_FRAME = 68;
 
 export default function Product() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const renderFrame = useFrameCanvas(canvasRef);
-
-  useEffect(() => {
-    renderFrame(PRODUCT_SHOT_FRAME);
-  }, [renderFrame]);
-
   return (
     <section
       id="produto"
       className="border-t border-line bg-bg px-6 py-28 md:py-36"
     >
       <div className="mx-auto grid max-w-6xl items-center gap-14 md:grid-cols-2 md:gap-20">
-        <Reveal className="relative aspect-square overflow-hidden rounded-md bg-bg-elevated">
-          <canvas
-            ref={canvasRef}
-            role="img"
-            aria-label="Pote do Sabão Polibrilho de 500g, aberto, com a pasta branca visível"
-            className="h-full w-full"
+        <Reveal className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-bg-elevated p-10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/product/photos/pote-real.webp"
+            alt="Pote do Sabão Polibrilho de 500g"
+            className="max-h-full max-w-full object-contain drop-shadow-[0_20px_35px_rgba(0,0,0,0.5)]"
           />
         </Reveal>
 

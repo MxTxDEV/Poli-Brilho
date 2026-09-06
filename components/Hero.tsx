@@ -1,32 +1,16 @@
-"use client";
-
-import { useEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
-import { useFrameCanvas } from "@/hooks/useFrameCanvas";
 
 export default function Hero() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const renderFrame = useFrameCanvas(canvasRef);
-
-  useEffect(() => {
-    renderFrame(1);
-  }, [renderFrame]);
-
   return (
     <section
       id="topo"
-      className="relative flex h-[100dvh] w-full flex-col items-center justify-center overflow-hidden bg-bg"
+      className="relative flex h-[100dvh] w-full flex-col items-center justify-center overflow-hidden bg-bg px-6"
     >
-      <canvas
-        ref={canvasRef}
-        role="img"
-        aria-label="Pote do Sabão Polibrilho fechado, centralizado sobre fundo preto com iluminação de estúdio"
-        className="absolute inset-0 h-full w-full"
-      />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        <div className="absolute left-1/2 top-[38%] h-[55vh] w-[55vh] -translate-x-1/2 -translate-y-1/2 rounded-full bg-silver-light/10 blur-[120px]" />
+      </div>
 
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/70" />
-
-      <div className="relative z-10 flex flex-col items-center px-6 text-center">
+      <div className="relative z-10 flex flex-col items-center text-center">
         <p className="mb-5 text-xs font-medium tracking-[0.4em] text-ink-muted">
           POLIBRILHO
         </p>
@@ -36,6 +20,13 @@ export default function Hero() {
         <p className="mt-5 max-w-md text-sm font-light text-ink-muted sm:text-base">
           Performance para quem exige mais do seu veículo.
         </p>
+
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/product/photos/pote-real.webp"
+          alt="Pote do Sabão Polibrilho, 500g, fechado"
+          className="mt-10 max-h-[30vh] w-auto drop-shadow-[0_30px_45px_rgba(0,0,0,0.65)] sm:max-h-[38vh]"
+        />
       </div>
 
       <div className="absolute bottom-9 z-10 flex flex-col items-center gap-2 text-[10px] font-medium tracking-[0.3em] text-ink-muted">
