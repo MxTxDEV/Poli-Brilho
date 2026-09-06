@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #050505;
+  --color-bg-elevated: #0c0c0d;
+  --color-line: #212124;
+  --color-ink: #f5f5f4;
+  --color-ink-muted: #9a9a9d;
+  --color-silver-light: #f2f3f4;
+  --color-silver: #c7c9cc;
+  --color-silver-dark: #6b6d70;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-bg-elevated: var(--color-bg-elevated);
+  --color-line: var(--color-line);
+  --color-ink: var(--color-ink);
+  --color-ink-muted: var(--color-ink-muted);
+  --color-silver-light: var(--color-silver-light);
+  --color-silver: var(--color-silver);
+  --color-silver-dark: var(--color-silver-dark);
+  --font-sans: var(--font-inter);
+}
+
+html {
+  background: var(--color-bg);
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+::selection {
+  background: var(--color-silver);
+  color: #050505;
+}
+
+.text-metal {
+  background: linear-gradient(
+    100deg,
+    var(--color-silver-dark) 0%,
+    var(--color-silver-light) 45%,
+    var(--color-silver) 60%,
+    var(--color-silver-light) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-silver-light);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
