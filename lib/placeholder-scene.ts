@@ -290,19 +290,167 @@ interface CarParams {
   dividerT: number; // 0 hidden -> 1 shown (before/after handle)
 }
 
+const CAR_IMAGE_SRC = "/product/photos/bmw-preto.webp";
+let carImg: HTMLImageElement | null = null;
+let carImgRequested = false;
+
+function ensureCarImage() {
+  if (carImgRequested || typeof window === "undefined") return;
+  carImgRequested = true;
+  const img = new Image();
+  img.onload = () => {
+    carImg = img;
+  };
+  img.src = CAR_IMAGE_SRC;
+}
+
 function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {
+  ensureCarImage();
   const { w, h, scale, coverage, sponge, dividerT } = params;
   const pad = w * (1 - scale) * 0.5;
   const px = -pad;
   const py = h * 0.08 - pad * 0.4;
   const pw = w + pad * 2;
   const ph = h * 0.86 + pad * 0.8;
+  const coverX = px + pw * coverage;
+
+  if (!carImg) {
+    drawAbstractCarPanel(ctx, { px, py, pw, ph, coverX, coverage, dividerT });
+  } else {
+    drawRealCarPanel(ctx, carImg, { px, py, pw, ph, coverX, coverage, dividerT });
+  }
+
+  if (sponge.visible > 0.02) {
+    const sx = px + sponge.x * pw;
+    const sy = py + ph * 0.5;
+    ctx.globalAlpha = sponge.visible;
+    drawSponge(ctx, sx, sy, Math.min(pw, ph) * 0.16, 0.4, 0.12);
+    ctx.globalAlpha = 1;
+  }
+}
+
+interface StageRect {
+  px: number;
+  py: number;
+  pw: number;
+  ph: number;
+  coverX: number;
+  coverage: number;
+  dividerT: number;
+}
+
+function drawBeforeAfterDivider(ctx: CanvasRenderingContext2D, stage: StageRect) {
+  const { py, ph, coverX, dividerT, pw } = stage;
+  if (dividerT <= 0.02) return;
+  ctx.globalAlpha = dividerT;
+  ctx.strokeStyle = INK.silverLight;
+  ctx.lineWidth = Math.max(1.5, pw * 0.0028);
+  ctx.beginPath();
+  ctx.moveTo(coverX, py);
+  ctx.lineTo(coverX, py + ph);
+  ctx.stroke();
+
+  const r = pw * 0.018;
+  ctx.beginPath();
+  ctx.arc(coverX, py + ph * 0.5, r, 0, Math.PI * 2);
+  ctx.fillStyle = INK.silverLight;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, stage: StageRect) {
+  const { px, py, pw, ph, coverX, coverage } = stage;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(px, py, pw, ph);
+  ctx.clip();
+
+  // studio floor
+  const floor = ctx.createLinearGradient(0, py, 0, py + ph);
+  floor.addColorStop(0, "#141416");
+  floor.addColorStop(0.7, "#0b0b0c");
+  floor.addColorStop(1, "#050505");
+  ctx.fillStyle = floor;
+  ctx.fillRect(px, py, pw, ph);
+
+  // fit the car photo (contain) inside the stage, slightly below center
+  const imgRatio = img.width / img.height;
+  let carW = pw * 0.88;
+  let carH = carW / imgRatio;
+  const maxH = ph * 0.42;
+  if (carH > maxH) {
+    carH = maxH;
+    carW = carH * imgRatio;
+  }
+  const carX = px + (pw - carW) / 2;
+  const carY = py + ph * 0.52 - carH / 2;
+
+  // ground shadow
+  ctx.beginPath();
+  ctx.ellipse(carX + carW * 0.5, carY + carH * 0.97, carW * 0.46, carH * 0.09, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fill();
+
+  // "antes" (right of divider): dull, desaturated, dusty
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(coverX, py, px + pw - coverX, ph);
+  ctx.clip();
+  ctx.filter = "grayscale(0.4) brightness(0.5) contrast(0.6) blur(0.6px)";
+  ctx.drawImage(img, carX, carY, carW, carH);
+  ctx.filter = "none";
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(carX, carY, carW, carH);
+  ctx.fillStyle = "#ffffff";
+  for (const d of DUST) {
+    ctx.globalAlpha = d.a * (1 - coverage) * 0.5;
+    ctx.beginPath();
+    ctx.arc(px + d.x * pw, py + d.y * ph, d.r * 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // "depois" (left of divider): true color + specular sweep
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(px, py, coverX - px, ph);
+  ctx.clip();
+  ctx.filter = "saturate(1.15) contrast(1.35) brightness(1.18)";
+  ctx.drawImage(img, carX, carY, carW, carH);
+  ctx.filter = "none";
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(carX, carY, carW, carH);
+  ctx.clip();
+  const sheen = ctx.createLinearGradient(carX, carY, carX + carW, carY + carH);
+  sheen.addColorStop(0, "rgba(255,255,255,0)");
+  sheen.addColorStop(0.46, "rgba(255,255,255,0)");
+  sheen.addColorStop(0.5, "rgba(255,255,255,0.35)");
+  sheen.addColorStop(0.54, "rgba(255,255,255,0)");
+  sheen.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.globalCompositeOperation = "screen";
+  ctx.fillStyle = sheen;
+  ctx.fillRect(carX, carY, carW, carH);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
+  ctx.restore();
+
+  drawBeforeAfterDivider(ctx, stage);
+  ctx.restore();
+}
+
+function drawAbstractCarPanel(ctx: CanvasRenderingContext2D, stage: StageRect) {
+  const { px, py, pw, ph, coverX, coverage } = stage;
 
   ctx.save();
   roundRectPath(ctx, px, py, pw, ph, Math.min(pw, ph) * 0.12);
   ctx.clip();
 
-  // matte base ("antes")
   ctx.fillStyle = INK.panel;
   ctx.fillRect(px, py, pw, ph);
   const flat = ctx.createLinearGradient(0, py, 0, py + ph);
@@ -321,8 +469,6 @@ function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {
   }
   ctx.globalAlpha = 1;
 
-  // glossy region ("depois") revealed left-to-right
-  const coverX = px + pw * coverage;
   ctx.save();
   ctx.beginPath();
   ctx.rect(px, py, coverX - px, ph);
@@ -336,65 +482,10 @@ function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {
   sheen.addColorStop(1, "#2c2d2f");
   ctx.fillStyle = sheen;
   ctx.fillRect(px, py, pw, ph);
-
-  const mirror = ctx.createLinearGradient(px, py, px, py + ph);
-  mirror.addColorStop(0, "rgba(255,255,255,0.28)");
-  mirror.addColorStop(0.35, "rgba(255,255,255,0.02)");
-  mirror.addColorStop(0.65, "rgba(255,255,255,0.02)");
-  mirror.addColorStop(1, "rgba(255,255,255,0.12)");
-  ctx.fillStyle = mirror;
-  ctx.fillRect(px, py, pw, ph);
   ctx.restore();
 
-  // subtle body lines to read as a car surface
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = Math.max(1, pw * 0.0022);
-  ctx.beginPath();
-  ctx.moveTo(px + pw * 0.05, py + ph * 0.62);
-  ctx.quadraticCurveTo(px + pw * 0.5, py + ph * 0.5, px + pw * 0.97, py + ph * 0.6);
-  ctx.stroke();
-
-  ctx.strokeStyle = "rgba(0,0,0,0.35)";
-  ctx.beginPath();
-  ctx.moveTo(px + pw * 0.62, py);
-  ctx.lineTo(px + pw * 0.66, py + ph);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(px + pw * 0.14, py + ph * 1.02, pw * 0.13, Math.PI, 0);
-  ctx.strokeStyle = "rgba(0,0,0,0.5)";
-  ctx.lineWidth = Math.max(1, pw * 0.006);
-  ctx.stroke();
-
-  // before/after divider handle
-  if (dividerT > 0.02) {
-    ctx.globalAlpha = dividerT;
-    ctx.strokeStyle = INK.silverLight;
-    ctx.lineWidth = Math.max(1.5, pw * 0.0028);
-    ctx.beginPath();
-    ctx.moveTo(coverX, py);
-    ctx.lineTo(coverX, py + ph);
-    ctx.stroke();
-
-    const r = pw * 0.018;
-    ctx.beginPath();
-    ctx.arc(coverX, py + ph * 0.5, r, 0, Math.PI * 2);
-    ctx.fillStyle = INK.silverLight;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.4)";
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
+  drawBeforeAfterDivider(ctx, stage);
   ctx.restore();
-
-  if (sponge.visible > 0.02) {
-    const sx = px + sponge.x * pw;
-    const sy = py + ph * 0.5;
-    ctx.globalAlpha = sponge.visible;
-    drawSponge(ctx, sx, sy, Math.min(pw, ph) * 0.16, 0.4, 0.12);
-    ctx.globalAlpha = 1;
-  }
 }
 
 function drawSparkles(ctx: CanvasRenderingContext2D, w: number, h: number, intensity: number, frame: number) {
