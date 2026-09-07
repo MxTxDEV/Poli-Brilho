@@ -378,9 +378,9 @@ function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
 
   // fit the car photo (contain) inside the stage, slightly below center
   const imgRatio = img.width / img.height;
-  let carW = pw * 0.88;
+  let carW = pw * 0.96;
   let carH = carW / imgRatio;
-  const maxH = ph * 0.42;
+  const maxH = ph * 0.68;
   if (carH > maxH) {
     carH = maxH;
     carW = carH * imgRatio;
