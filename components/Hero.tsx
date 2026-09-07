@@ -23,7 +23,7 @@ export default function Hero() {
 
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/product/photos/pote-real.webp"
+          src="https://polibrilho-assets-mxtxdev.vercel.app/pote-real.webp"
           alt="Pote do Sabão Polibrilho, 500g, fechado"
           className="mt-10 max-h-[30vh] w-auto drop-shadow-[0_30px_45px_rgba(0,0,0,0.65)] sm:max-h-[38vh]"
         />

@@ -290,7 +290,7 @@ interface CarParams {
   dividerT: number; // 0 hidden -> 1 shown (before/after handle)
 }
 
-const CAR_IMAGE_SRC = "/product/photos/bmw-preto.webp";
+const CAR_IMAGE_SRC = "https://polibrilho-assets-mxtxdev.vercel.app/bmw-preto.webp";
 let carImg: HTMLImageElement | null = null;
 let carImgRequested = false;
 
@@ -360,8 +360,69 @@ function drawBeforeAfterDivider(ctx: CanvasRenderingContext2D, stage: StageRect)
   ctx.globalAlpha = 1;
 }
 
+/**
+ * Clips to the car's own bounding box, replacing its vertical edge at
+ * `coverX` with a gentle diagonal (`slant`) so the before/after boundary
+ * reads as a wipe across the car's body rather than a straight cut across
+ * the whole backdrop.
+ */
+function clipCarDiagonalSide(
+  ctx: CanvasRenderingContext2D,
+  side: "left" | "right",
+  carX: number,
+  carY: number,
+  carW: number,
+  carH: number,
+  coverX: number,
+  slant: number
+) {
+  const topX = coverX - slant;
+  const botX = coverX + slant;
+  ctx.beginPath();
+  if (side === "left") {
+    ctx.moveTo(carX, carY);
+    ctx.lineTo(topX, carY);
+    ctx.lineTo(botX, carY + carH);
+    ctx.lineTo(carX, carY + carH);
+  } else {
+    ctx.moveTo(topX, carY);
+    ctx.lineTo(carX + carW, carY);
+    ctx.lineTo(carX + carW, carY + carH);
+    ctx.lineTo(botX, carY + carH);
+  }
+  ctx.closePath();
+  ctx.clip();
+}
+
+function drawCarAlignedDivider(
+  ctx: CanvasRenderingContext2D,
+  carY: number,
+  carH: number,
+  coverX: number,
+  slant: number,
+  dividerT: number
+) {
+  if (dividerT <= 0.02) return;
+  ctx.globalAlpha = dividerT;
+  ctx.strokeStyle = INK.silverLight;
+  ctx.lineWidth = Math.max(1.5, carH * 0.01);
+  ctx.beginPath();
+  ctx.moveTo(coverX - slant, carY);
+  ctx.lineTo(coverX + slant, carY + carH);
+  ctx.stroke();
+
+  const r = carH * 0.05;
+  ctx.beginPath();
+  ctx.arc(coverX, carY + carH * 0.5, r, 0, Math.PI * 2);
+  ctx.fillStyle = INK.silverLight;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
 function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, stage: StageRect) {
-  const { px, py, pw, ph, coverX, coverage } = stage;
+  const { px, py, pw, ph, coverage } = stage;
 
   ctx.save();
   ctx.beginPath();
@@ -394,11 +455,14 @@ function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.fill();
 
+  // the clean/dirty boundary is scoped to the car's own silhouette (not the
+  // whole backdrop) and slanted, so it reads as a wipe across the body.
+  const carCoverX = carX + carW * coverage;
+  const slant = carH * 0.16;
+
   // "antes" (right of divider): dull, desaturated, dusty
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(coverX, py, px + pw - coverX, ph);
-  ctx.clip();
+  clipCarDiagonalSide(ctx, "right", carX, carY, carW, carH, carCoverX, slant);
   ctx.filter = "grayscale(0.4) brightness(0.5) contrast(0.6) blur(0.6px)";
   ctx.drawImage(img, carX, carY, carW, carH);
   ctx.filter = "none";
@@ -408,7 +472,7 @@ function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
   for (const d of DUST) {
     ctx.globalAlpha = d.a * (1 - coverage) * 0.5;
     ctx.beginPath();
-    ctx.arc(px + d.x * pw, py + d.y * ph, d.r * 1.4, 0, Math.PI * 2);
+    ctx.arc(carX + d.x * carW, carY + d.y * carH, d.r * 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
@@ -416,9 +480,7 @@ function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
 
   // "depois" (left of divider): true color + specular sweep
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(px, py, coverX - px, ph);
-  ctx.clip();
+  clipCarDiagonalSide(ctx, "left", carX, carY, carW, carH, carCoverX, slant);
   ctx.filter = "saturate(1.15) contrast(1.35) brightness(1.18)";
   ctx.drawImage(img, carX, carY, carW, carH);
   ctx.filter = "none";
@@ -440,7 +502,7 @@ function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
   ctx.restore();
   ctx.restore();
 
-  drawBeforeAfterDivider(ctx, stage);
+  drawCarAlignedDivider(ctx, carY, carH, carCoverX, slant, stage.dividerT);
   ctx.restore();
 }
 
