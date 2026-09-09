@@ -23,6 +23,11 @@ export function useFrameCanvas(canvasRef: RefObject<HTMLCanvasElement | null>) {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
+      // The car photo is drawn well above its native size, so ask for the
+      // better resampling kernel instead of the browser default.
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+
       const { width, height } = canvas;
       const img = mode === "images" ? getImage(frameOneBased) : null;
 

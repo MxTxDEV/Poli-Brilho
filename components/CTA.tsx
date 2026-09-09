@@ -1,5 +1,6 @@
 import Reveal from "@/components/Reveal";
 import { whatsappLink } from "@/lib/contact";
+import { POTE_PHOTO } from "@/lib/assets";
 
 const CTA_LINK = whatsappLink("Olá! Quero experimentar o Sabão Polibrilho.");
 
@@ -11,7 +12,7 @@ export default function CTA() {
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="https://polibrilho-assets-mxtxdev.vercel.app/pote-real.webp"
+        src={POTE_PHOTO}
         alt=""
         aria-hidden="true"
         className="pointer-events-none absolute left-1/2 top-1/2 h-[130%] w-auto -translate-x-1/2 -translate-y-1/2 opacity-[0.07] blur-[2px]"

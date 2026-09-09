@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import { POTE_PHOTO } from "@/lib/assets";
 
 export default function Hero() {
   return (
@@ -23,7 +24,7 @@ export default function Hero() {
 
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="https://polibrilho-assets-mxtxdev.vercel.app/pote-real.webp"
+          src={POTE_PHOTO}
           alt="Pote do Sabão Polibrilho, 500g, fechado"
           className="mt-10 max-h-[30vh] w-auto drop-shadow-[0_30px_45px_rgba(0,0,0,0.65)] sm:max-h-[38vh]"
         />

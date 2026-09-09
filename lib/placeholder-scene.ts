@@ -1,3 +1,4 @@
+import { CAR_PHOTO } from "./assets";
 import { FRAME_COUNT, SCENES } from "./frames";
 import { clamp01, keyframes, lerp, remap, seededSpecks, smoothstep } from "./interpolate";
 
@@ -290,7 +291,6 @@ interface CarParams {
   dividerT: number; // 0 hidden -> 1 shown (before/after handle)
 }
 
-const CAR_IMAGE_SRC = "https://polibrilho-assets-mxtxdev.vercel.app/bmw-preto.webp";
 let carImg: HTMLImageElement | null = null;
 let carImgRequested = false;
 
@@ -298,10 +298,13 @@ function ensureCarImage() {
   if (carImgRequested || typeof window === "undefined") return;
   carImgRequested = true;
   const img = new Image();
+  // The photo is cross-origin; request it with CORS so the canvas stays
+  // untainted and the shine pass can keep compositing over it.
+  img.crossOrigin = "anonymous";
   img.onload = () => {
     carImg = img;
   };
-  img.src = CAR_IMAGE_SRC;
+  img.src = CAR_PHOTO;
 }
 
 function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {

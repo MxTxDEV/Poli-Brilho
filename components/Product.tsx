@@ -1,6 +1,7 @@
 import { MessageCircle } from "lucide-react";
 import Reveal from "@/components/Reveal";
 import { INSTAGRAM_HANDLE, WHATSAPP_DISPLAY, whatsappLink } from "@/lib/contact";
+import { POTE_PHOTO } from "@/lib/assets";
 
 const WHATSAPP_LINK = whatsappLink("Olá! Quero comprar o Sabão Polibrilho.");
 
@@ -14,7 +15,7 @@ export default function Product() {
         <Reveal className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-bg-elevated p-10">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="https://polibrilho-assets-mxtxdev.vercel.app/pote-real.webp"
+            src={POTE_PHOTO}
             alt="Pote do Sabão Polibrilho de 500g"
             className="max-h-full max-w-full object-contain drop-shadow-[0_20px_35px_rgba(0,0,0,0.5)]"
           />
