@@ -1,17 +1,16 @@
-import { CAR_PHOTO } from "./assets";
+import { CAR_PHOTO, POTE_PHOTO } from "./assets";
 import { FRAME_COUNT, SCENES } from "./frames";
 import { clamp01, keyframes, lerp, remap, seededSpecks, smoothstep } from "./interpolate";
 
 /**
- * Procedural stand-in for the real photographed/rendered frame sequence.
+ * The scroll-driven scene, drawn from the real product photography.
  *
- * `useFrameSequence` calls `drawPlaceholderFrame` whenever a real frame
- * image for the current index isn't available yet. It reproduces the full
- * nine-beat choreography (jar → lid → paste → sponge → car → shine →
- * before/after → final) as flat vector shapes so the scroll experience,
- * timing and pacing can be built, reviewed and shipped before real
- * photography/render frames exist. Swap in `/public/product/frames/*.webp`
- * at any time — nothing else in the app needs to change.
+ * `useFrameCanvas` calls `drawPlaceholderFrame` for every scroll update. It
+ * composes the two supplied photos — the jar and the car — into the nine-beat
+ * choreography (jar → lid → paste → sponge → car → shine → before/after →
+ * final) with camera moves, specular sweeps and a wipe that follows the car's
+ * body. Dropping real frames into `/public/product/frames/` takes over from
+ * this renderer without any other change.
  */
 
 const frameP = (frameOneBased: number) => (frameOneBased - 1) / (FRAME_COUNT - 1);
@@ -37,14 +36,91 @@ const SPARKLE = seededSpecks(18, 404);
 const INK = {
   black: "#050505",
   panel: "#0c0c0d",
-  matte: "#28282b",
-  silverDark: "#6b6d70",
-  silver: "#c7c9cc",
   silverLight: "#f2f3f4",
-  white: "#f6f6f4",
 };
 
-function drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, p: number) {
+/* ------------------------------------------------------------------ photos */
+
+const photoCache = new Map<string, HTMLImageElement>();
+const photoRequested = new Set<string>();
+const photoListeners = new Set<() => void>();
+
+/**
+ * Subscribes to photo loads. A frame is only drawn in response to a scroll
+ * update, so without this a photo that finishes loading after the current
+ * frame was painted would not appear until the next scroll — landing partway
+ * down the page would leave the abstract fallback on screen indefinitely.
+ */
+export function onPhotoLoad(listener: () => void): () => void {
+  photoListeners.add(listener);
+  return () => {
+    photoListeners.delete(listener);
+  };
+}
+
+/** Returns the decoded photo once it has loaded, kicking off the load on first ask. */
+function photo(src: string): HTMLImageElement | null {
+  const loaded = photoCache.get(src);
+  if (loaded) return loaded;
+  if (typeof window === "undefined" || photoRequested.has(src)) return null;
+
+  photoRequested.add(src);
+  const img = new Image();
+  // The originals are served from GitHub, so ask for CORS explicitly — without
+  // it the canvas would be tainted and the compositing passes below would fail.
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    photoCache.set(src, img);
+    for (const listener of photoListeners) listener();
+  };
+  img.src = src;
+  return null;
+}
+
+/**
+ * A single reusable offscreen canvas. Highlights and tints have to be clipped
+ * to a photo's own alpha rather than its bounding box, which means compositing
+ * them onto a layer that holds nothing but the photo.
+ */
+let scratch: HTMLCanvasElement | null = null;
+
+function scratchLayer(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+  if (!scratch) scratch = document.createElement("canvas");
+  const cw = Math.max(1, Math.ceil(w));
+  const ch = Math.max(1, Math.ceil(h));
+  if (scratch.width !== cw || scratch.height !== ch) {
+    scratch.width = cw;
+    scratch.height = ch;
+  }
+  const ctx = scratch.getContext("2d")!;
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  return [scratch, ctx];
+}
+
+/** A soft highlight band sweeping across the layer's diagonal, centred on `at`. */
+function sweepGradient(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  at: number,
+  strength: number
+): CanvasGradient {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  const c = clamp01(at);
+  const edge = 0.11;
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  if (c - edge > 0) g.addColorStop(c - edge, "rgba(255,255,255,0)");
+  g.addColorStop(c, `rgba(255,255,255,${0.4 * strength})`);
+  if (c + edge < 1) g.addColorStop(c + edge, "rgba(255,255,255,0)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  return g;
+}
+
+/* ----------------------------------------------------------------- backdrop */
+
+function drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.fillStyle = INK.black;
   ctx.fillRect(0, 0, w, h);
 
@@ -77,7 +153,6 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, p: nu
   vig.addColorStop(1, "rgba(0,0,0,0.55)");
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, w, h);
-  void p;
 }
 
 function roundRectPath(
@@ -98,238 +173,87 @@ function roundRectPath(
   ctx.closePath();
 }
 
-interface JarParams {
+/* ------------------------------------------------------------- the jar shot */
+
+interface ProductShot {
   cx: number;
   cy: number;
-  scale: number;
-  lidLift: number; // 0 seated, 1 fully off
-  lidWobble: number; // twisting phase
-  lidBesideT: number; // 0 hovering above, 1 resting beside (final scene)
-  pasteReveal: number; // 0..1
-  spongeAttach: number; // 0..1
-  unit: number;
+  /** Drawn height in device pixels; width follows the photo's aspect ratio. */
+  height: number;
+  tilt: number;
+  /** 0..1 position of the specular band along the jar's diagonal. */
+  sweep: number;
+  sweepStrength: number;
+  glow: number;
 }
 
-function drawJarGroup(ctx: CanvasRenderingContext2D, params: JarParams) {
-  const { cx, cy, scale, lidLift, lidWobble, lidBesideT, pasteReveal, spongeAttach } = params;
-  const u = params.unit * scale;
-
-  const bodyW = u * 1.9;
-  const bodyH = u * 2.5;
-  const bodyX = cx - bodyW / 2;
-  const bodyY = cy - bodyH / 2 + u * 0.35;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = u * 0.35;
-  ctx.shadowOffsetY = u * 0.18;
-  ctx.beginPath();
-  ctx.ellipse(cx, bodyY + bodyH + u * 0.05, bodyW * 0.42, u * 0.14, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fill();
-  ctx.restore();
-
-  // jar body
-  const bodyGrad = ctx.createLinearGradient(bodyX, 0, bodyX + bodyW, 0);
-  bodyGrad.addColorStop(0, "#050505");
-  bodyGrad.addColorStop(0.42, INK.matte);
-  bodyGrad.addColorStop(0.58, INK.matte);
-  bodyGrad.addColorStop(1, "#050505");
-  roundRectPath(ctx, bodyX, bodyY, bodyW, bodyH, u * 0.2);
-  ctx.fillStyle = bodyGrad;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = Math.max(1, u * 0.01);
-  ctx.stroke();
-
-  // label plate
-  const labelW = bodyW * 0.82;
-  const labelH = bodyH * 0.34;
-  const labelX = cx - labelW / 2;
-  const labelY = bodyY + bodyH * 0.4;
-  roundRectPath(ctx, labelX, labelY, labelW, labelH, u * 0.08);
-  ctx.fillStyle = "#020202";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(200,201,204,0.35)";
-  ctx.lineWidth = Math.max(1, u * 0.008);
-  ctx.stroke();
-
-  const chrome = ctx.createLinearGradient(0, labelY, 0, labelY + labelH * 0.5);
-  chrome.addColorStop(0, INK.silverLight);
-  chrome.addColorStop(0.5, INK.silverDark);
-  chrome.addColorStop(1, INK.silver);
-  ctx.fillStyle = chrome;
-  ctx.textAlign = "center";
-  ctx.font = `900 ${Math.round(u * 0.14)}px Arial, Helvetica, sans-serif`;
-  ctx.fillText("POLIBRILHO", cx, labelY + labelH * 0.46);
-  ctx.font = `600 ${Math.round(u * 0.065)}px Arial, Helvetica, sans-serif`;
-  ctx.fillStyle = "rgba(200,201,204,0.75)";
-  ctx.fillText("500 G", cx, labelY + labelH * 0.75);
-
-  // creamy paste mounded at the mouth
-  if (pasteReveal > 0.02) {
-    const domeW = bodyW * 0.74;
-    const domeH = u * 0.34 * pasteReveal + u * 0.03;
-    const domeY = bodyY + u * 0.02 - domeH * 0.35;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(bodyX, 0, bodyW, domeY + domeH * 1.15);
-    ctx.clip();
-
-    const paste = ctx.createRadialGradient(
-      cx - domeW * 0.18,
-      domeY - domeH * 0.4,
-      u * 0.02,
-      cx,
-      domeY,
-      domeW * 0.6
-    );
-    paste.addColorStop(0, INK.silverLight);
-    paste.addColorStop(0.5, "#e6e6e4");
-    paste.addColorStop(1, "#a9aaa7");
-    ctx.fillStyle = paste;
-    ctx.beginPath();
-    ctx.ellipse(cx, domeY, domeW / 2, domeH, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(0,0,0,0.15)";
-    ctx.lineWidth = Math.max(1, u * 0.01);
-    ctx.beginPath();
-    ctx.moveTo(cx - domeW * 0.28, domeY - domeH * 0.1);
-    ctx.quadraticCurveTo(cx, domeY - domeH * 0.55, cx + domeW * 0.28, domeY - domeH * 0.1);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // sponge resting on paste
-  if (spongeAttach > 0.01) {
-    const sx = cx + bodyW * 0.28;
-    const sy = bodyY - u * 0.14 - spongeAttach * u * 0.08;
-    drawSponge(ctx, sx, sy, u * 0.62, spongeAttach, 0.15);
-  }
-
-  // lid
-  const restBesideX = cx + bodyW * 0.95;
-  const liftedY = bodyY - u * (0.55 + lidLift * 1.35);
-  const lidX = lerp(cx, restBesideX, smoothstep(lidBesideT));
-  const lidY = lerp(liftedY, cy + bodyH * 0.34, smoothstep(lidBesideT));
-  const lidW = bodyW * lerp(1, 0.62, smoothstep(lidBesideT));
-  const lidH = u * 0.42 * lerp(1, 0.7, smoothstep(lidBesideT));
-
-  ctx.save();
-  ctx.translate(lidX, lidY);
-  ctx.rotate(lidBesideT > 0.5 ? -0.55 : Math.sin(lidWobble) * 0.05 * (1 - lidLift * 0.4));
-  const lidGrad = ctx.createLinearGradient(-lidW / 2, 0, lidW / 2, 0);
-  lidGrad.addColorStop(0, "#050505");
-  lidGrad.addColorStop(0.4, "#3a3a3d");
-  lidGrad.addColorStop(0.5, "#4c4c4f");
-  lidGrad.addColorStop(0.6, "#3a3a3d");
-  lidGrad.addColorStop(1, "#050505");
-  roundRectPath(ctx, -lidW / 2, -lidH / 2, lidW, lidH, lidH * 0.28);
-  ctx.fillStyle = lidGrad;
-  ctx.fill();
-
-  // rotating thread ridges (fakes the twist-off motion in 2D)
-  ctx.save();
-  roundRectPath(ctx, -lidW / 2, -lidH / 2, lidW, lidH, lidH * 0.28);
-  ctx.clip();
-  const ridgeCount = 14;
-  const phase = (lidWobble * 2.4) % 1;
-  ctx.strokeStyle = "rgba(0,0,0,0.45)";
-  ctx.lineWidth = Math.max(1, lidW * 0.012);
-  for (let i = -2; i <= ridgeCount + 2; i++) {
-    const rx = -lidW / 2 + ((i + phase) / ridgeCount) * lidW;
-    ctx.beginPath();
-    ctx.moveTo(rx, -lidH / 2);
-    ctx.lineTo(rx, lidH / 2);
-    ctx.stroke();
-  }
-  ctx.restore();
-  ctx.restore();
+/** A soft pool of light standing in for the jar until its photo has loaded. */
+function drawProductGlow(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.6);
+  g.addColorStop(0, "rgba(242,243,244,0.14)");
+  g.addColorStop(0.6, "rgba(199,201,204,0.05)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - size, cy - size, size * 2, size * 2);
 }
 
-function drawSponge(
+function drawProductPhoto(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  size: number,
-  attach: number,
-  rotation: number
+  img: HTMLImageElement,
+  shot: ProductShot
 ) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  const w = size;
-  const h = size * 0.58;
-  roundRectPath(ctx, -w / 2, -h / 2, w, h, h * 0.42);
-  const grad = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
-  grad.addColorStop(0, "#e9e8e4");
-  grad.addColorStop(1, "#b7b6b0");
-  ctx.fillStyle = grad;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(0,0,0,0.25)";
-  ctx.lineWidth = Math.max(1, size * 0.012);
-  ctx.stroke();
+  const base = ctx.globalAlpha;
+  const h = shot.height;
+  const w = h * (img.width / img.height);
+  const top = shot.cy - h / 2;
 
-  if (attach > 0.05) {
-    ctx.beginPath();
-    ctx.ellipse(-w * 0.1, -h * 0.05, w * 0.28 * attach, h * 0.32 * attach, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(246,246,244,0.95)";
-    ctx.fill();
+  if (shot.glow > 0.01) {
+    const halo = ctx.createRadialGradient(shot.cx, shot.cy, 0, shot.cx, shot.cy, w * 0.9);
+    halo.addColorStop(0, `rgba(242,243,244,${0.15 * shot.glow})`);
+    halo.addColorStop(0.55, `rgba(199,201,204,${0.05 * shot.glow})`);
+    halo.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(shot.cx - w, shot.cy - w, w * 2, w * 2);
   }
+
+  // contact shadow on the studio floor
+  ctx.save();
+  ctx.globalAlpha = base * 0.5;
+  ctx.filter = `blur(${Math.max(3, h * 0.03)}px)`;
+  ctx.fillStyle = "#000000";
+  ctx.beginPath();
+  ctx.ellipse(shot.cx, top + h * 0.97, w * 0.34, h * 0.045, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const pad = Math.ceil(Math.max(4, h * 0.02));
+  const [layer, lctx] = scratchLayer(w + pad * 2, h + pad * 2);
+  lctx.drawImage(img, pad, pad, w, h);
+
+  if (shot.sweepStrength > 0.02) {
+    lctx.globalCompositeOperation = "source-atop";
+    lctx.fillStyle = sweepGradient(lctx, layer.width, layer.height, shot.sweep, shot.sweepStrength);
+    lctx.fillRect(0, 0, layer.width, layer.height);
+    lctx.globalCompositeOperation = "source-over";
+  }
+
+  ctx.save();
+  ctx.translate(shot.cx, shot.cy);
+  ctx.rotate(shot.tilt);
+  ctx.drawImage(layer, -(w / 2 + pad), -(h / 2 + pad));
   ctx.restore();
 }
+
+/* ------------------------------------------------------------- the car shot */
 
 interface CarParams {
-  p: number;
   w: number;
   h: number;
   scale: number;
-  coverage: number; // 0..1 glossy fraction from the left
-  sponge: { visible: number; x: number };
-  dividerT: number; // 0 hidden -> 1 shown (before/after handle)
-}
-
-let carImg: HTMLImageElement | null = null;
-let carImgRequested = false;
-
-function ensureCarImage() {
-  if (carImgRequested || typeof window === "undefined") return;
-  carImgRequested = true;
-  const img = new Image();
-  // The photo is cross-origin; request it with CORS so the canvas stays
-  // untainted and the shine pass can keep compositing over it.
-  img.crossOrigin = "anonymous";
-  img.onload = () => {
-    carImg = img;
-  };
-  img.src = CAR_PHOTO;
-}
-
-function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {
-  ensureCarImage();
-  const { w, h, scale, coverage, sponge, dividerT } = params;
-  const pad = w * (1 - scale) * 0.5;
-  const px = -pad;
-  const py = h * 0.08 - pad * 0.4;
-  const pw = w + pad * 2;
-  const ph = h * 0.86 + pad * 0.8;
-  const coverX = px + pw * coverage;
-
-  if (!carImg) {
-    drawAbstractCarPanel(ctx, { px, py, pw, ph, coverX, coverage, dividerT });
-  } else {
-    drawRealCarPanel(ctx, carImg, { px, py, pw, ph, coverX, coverage, dividerT });
-  }
-
-  if (sponge.visible > 0.02) {
-    const sx = px + sponge.x * pw;
-    const sy = py + ph * 0.5;
-    ctx.globalAlpha = sponge.visible;
-    drawSponge(ctx, sx, sy, Math.min(pw, ph) * 0.16, 0.4, 0.12);
-    ctx.globalAlpha = 1;
-  }
+  /** 0..1 glossy fraction, wiped in from the left. */
+  coverage: number;
+  applicator: { visible: number; x: number };
+  dividerT: number;
 }
 
 interface StageRect {
@@ -342,32 +266,82 @@ interface StageRect {
   dividerT: number;
 }
 
-function drawBeforeAfterDivider(ctx: CanvasRenderingContext2D, stage: StageRect) {
-  const { py, ph, coverX, dividerT, pw } = stage;
-  if (dividerT <= 0.02) return;
-  ctx.globalAlpha = dividerT;
-  ctx.strokeStyle = INK.silverLight;
-  ctx.lineWidth = Math.max(1.5, pw * 0.0028);
-  ctx.beginPath();
-  ctx.moveTo(coverX, py);
-  ctx.lineTo(coverX, py + ph);
-  ctx.stroke();
+/**
+ * The dull "antes" and glossy "depois" treatments are expensive (a blur, two
+ * colour filters, seventy dust specks) and depend only on the drawn size, so
+ * they are baked once per size instead of on every scroll tick.
+ */
+let carVariantKey = "";
+let carDull: HTMLCanvasElement | null = null;
+let carGloss: HTMLCanvasElement | null = null;
 
-  const r = pw * 0.018;
-  ctx.beginPath();
-  ctx.arc(coverX, py + ph * 0.5, r, 0, Math.PI * 2);
-  ctx.fillStyle = INK.silverLight;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(0,0,0,0.4)";
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+function bakeCarVariant(
+  img: HTMLImageElement,
+  w: number,
+  h: number,
+  filter: string,
+  treat: (ctx: CanvasRenderingContext2D) => void
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(w));
+  canvas.height = Math.max(1, Math.ceil(h));
+  const ctx = canvas.getContext("2d")!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.filter = filter;
+  ctx.drawImage(img, 0, 0, w, h);
+  ctx.filter = "none";
+  // source-atop keeps every following pass inside the car's own silhouette,
+  // so nothing bleeds onto the studio floor behind it.
+  ctx.globalCompositeOperation = "source-atop";
+  treat(ctx);
+  ctx.globalCompositeOperation = "source-over";
+  return canvas;
+}
+
+function ensureCarVariants(img: HTMLImageElement, w: number, h: number) {
+  const key = `${Math.round(w)}x${Math.round(h)}`;
+  if (key === carVariantKey && carDull && carGloss) return;
+  carVariantKey = key;
+
+  carDull = bakeCarVariant(
+    img,
+    w,
+    h,
+    "grayscale(0.55) brightness(0.62) contrast(0.9) blur(0.7px)",
+    (ctx) => {
+      // a thin grey film, not a black wash — dust scatters light, it does
+      // not simply darken the paint
+      ctx.fillStyle = "rgba(122,124,120,0.14)";
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#d8d8d4";
+      const speck = Math.max(1, w / 1600);
+      for (const d of DUST) {
+        ctx.globalAlpha = d.a * 0.26;
+        ctx.beginPath();
+        ctx.arc(d.x * w, d.y * h, d.r * speck * 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  );
+
+  carGloss = bakeCarVariant(
+    img,
+    w,
+    h,
+    "saturate(1.2) contrast(1.32) brightness(1.16)",
+    (ctx) => {
+      ctx.fillStyle = sweepGradient(ctx, w, h, 0.5, 0.8);
+      ctx.fillRect(0, 0, w, h);
+    }
+  );
 }
 
 /**
- * Clips to the car's own bounding box, replacing its vertical edge at
- * `coverX` with a gentle diagonal (`slant`) so the before/after boundary
- * reads as a wipe across the car's body rather than a straight cut across
- * the whole backdrop.
+ * Clips to the car's bounding box, replacing the vertical edge at `coverX`
+ * with a gentle diagonal so the before/after boundary reads as a wipe across
+ * the body rather than a straight cut across the whole backdrop.
  */
 function clipCarDiagonalSide(
   ctx: CanvasRenderingContext2D,
@@ -406,106 +380,121 @@ function drawCarAlignedDivider(
   dividerT: number
 ) {
   if (dividerT <= 0.02) return;
-  ctx.globalAlpha = dividerT;
+  const base = ctx.globalAlpha;
+  ctx.globalAlpha = base * dividerT;
   ctx.strokeStyle = INK.silverLight;
-  ctx.lineWidth = Math.max(1.5, carH * 0.01);
+  ctx.lineWidth = Math.max(1.5, carH * 0.008);
+  // keep the line on the bodywork rather than the empty box around it
+  const top = 0.24;
+  const bottom = 0.96;
+  const xAt = (t: number) => coverX - slant + slant * 2 * t;
   ctx.beginPath();
-  ctx.moveTo(coverX - slant, carY);
-  ctx.lineTo(coverX + slant, carY + carH);
+  ctx.moveTo(xAt(top), carY + carH * top);
+  ctx.lineTo(xAt(bottom), carY + carH * bottom);
   ctx.stroke();
 
-  const r = carH * 0.05;
+  const r = carH * 0.045;
   ctx.beginPath();
   ctx.arc(coverX, carY + carH * 0.5, r, 0, Math.PI * 2);
   ctx.fillStyle = INK.silverLight;
   ctx.fill();
   ctx.strokeStyle = "rgba(0,0,0,0.4)";
   ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = base;
 }
 
-function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, stage: StageRect) {
-  const { px, py, pw, ph, coverage } = stage;
-
-  ctx.save();
+function drawBeforeAfterDivider(ctx: CanvasRenderingContext2D, stage: StageRect) {
+  const { py, ph, coverX, dividerT, pw } = stage;
+  if (dividerT <= 0.02) return;
+  const base = ctx.globalAlpha;
+  ctx.globalAlpha = base * dividerT;
+  ctx.strokeStyle = INK.silverLight;
+  ctx.lineWidth = Math.max(1.5, pw * 0.0028);
   ctx.beginPath();
-  ctx.rect(px, py, pw, ph);
-  ctx.clip();
+  ctx.moveTo(coverX, py);
+  ctx.lineTo(coverX, py + ph);
+  ctx.stroke();
 
-  // studio floor
+  const r = pw * 0.018;
+  ctx.beginPath();
+  ctx.arc(coverX, py + ph * 0.5, r, 0, Math.PI * 2);
+  ctx.fillStyle = INK.silverLight;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.stroke();
+  ctx.globalAlpha = base;
+}
+
+/** Geometry of the car inside the stage, shared by the panel and the applicator. */
+function carRect(img: HTMLImageElement, stage: StageRect) {
+  const { px, py, pw, ph } = stage;
+  const ratio = img.width / img.height;
+  let carW = pw * 0.96;
+  let carH = carW / ratio;
+  const maxH = ph * 0.68;
+  if (carH > maxH) {
+    carH = maxH;
+    carW = carH * ratio;
+  }
+  return {
+    carX: px + (pw - carW) / 2,
+    carY: py + ph * 0.52 - carH / 2,
+    carW,
+    carH,
+  };
+}
+
+function drawStudioFloor(ctx: CanvasRenderingContext2D, stage: StageRect) {
+  const { px, py, pw, ph } = stage;
   const floor = ctx.createLinearGradient(0, py, 0, py + ph);
   floor.addColorStop(0, "#141416");
   floor.addColorStop(0.7, "#0b0b0c");
   floor.addColorStop(1, "#050505");
   ctx.fillStyle = floor;
   ctx.fillRect(px, py, pw, ph);
+}
 
-  // fit the car photo (contain) inside the stage, slightly below center
-  const imgRatio = img.width / img.height;
-  let carW = pw * 0.96;
-  let carH = carW / imgRatio;
-  const maxH = ph * 0.68;
-  if (carH > maxH) {
-    carH = maxH;
-    carW = carH * imgRatio;
-  }
-  const carX = px + (pw - carW) / 2;
-  const carY = py + ph * 0.52 - carH / 2;
+function drawRealCarPanel(ctx: CanvasRenderingContext2D, img: HTMLImageElement, stage: StageRect) {
+  const { px, py, pw, ph, coverage, dividerT } = stage;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(px, py, pw, ph);
+  ctx.clip();
+
+  drawStudioFloor(ctx, stage);
+
+  const { carX, carY, carW, carH } = carRect(img, stage);
+  ensureCarVariants(img, carW, carH);
 
   // ground shadow
+  ctx.save();
+  ctx.globalAlpha = ctx.globalAlpha * 0.55;
+  ctx.filter = `blur(${Math.max(3, carH * 0.03)}px)`;
+  ctx.fillStyle = "#000000";
   ctx.beginPath();
-  ctx.ellipse(carX + carW * 0.5, carY + carH * 0.97, carW * 0.46, carH * 0.09, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.ellipse(carX + carW * 0.5, carY + carH * 0.95, carW * 0.44, carH * 0.06, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 
-  // the clean/dirty boundary is scoped to the car's own silhouette (not the
-  // whole backdrop) and slanted, so it reads as a wipe across the body.
   const carCoverX = carX + carW * coverage;
   const slant = carH * 0.16;
 
-  // "antes" (right of divider): dull, desaturated, dusty
-  ctx.save();
-  clipCarDiagonalSide(ctx, "right", carX, carY, carW, carH, carCoverX, slant);
-  ctx.filter = "grayscale(0.4) brightness(0.5) contrast(0.6) blur(0.6px)";
-  ctx.drawImage(img, carX, carY, carW, carH);
-  ctx.filter = "none";
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.fillRect(carX, carY, carW, carH);
-  ctx.fillStyle = "#ffffff";
-  for (const d of DUST) {
-    ctx.globalAlpha = d.a * (1 - coverage) * 0.5;
-    ctx.beginPath();
-    ctx.arc(carX + d.x * carW, carY + d.y * carH, d.r * 1.4, 0, Math.PI * 2);
-    ctx.fill();
+  if (carDull) {
+    ctx.save();
+    clipCarDiagonalSide(ctx, "right", carX, carY, carW, carH, carCoverX, slant);
+    ctx.drawImage(carDull, carX, carY, carW, carH);
+    ctx.restore();
   }
-  ctx.globalAlpha = 1;
-  ctx.restore();
 
-  // "depois" (left of divider): true color + specular sweep
-  ctx.save();
-  clipCarDiagonalSide(ctx, "left", carX, carY, carW, carH, carCoverX, slant);
-  ctx.filter = "saturate(1.15) contrast(1.35) brightness(1.18)";
-  ctx.drawImage(img, carX, carY, carW, carH);
-  ctx.filter = "none";
+  if (carGloss) {
+    ctx.save();
+    clipCarDiagonalSide(ctx, "left", carX, carY, carW, carH, carCoverX, slant);
+    ctx.drawImage(carGloss, carX, carY, carW, carH);
+    ctx.restore();
+  }
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(carX, carY, carW, carH);
-  ctx.clip();
-  const sheen = ctx.createLinearGradient(carX, carY, carX + carW, carY + carH);
-  sheen.addColorStop(0, "rgba(255,255,255,0)");
-  sheen.addColorStop(0.46, "rgba(255,255,255,0)");
-  sheen.addColorStop(0.5, "rgba(255,255,255,0.35)");
-  sheen.addColorStop(0.54, "rgba(255,255,255,0)");
-  sheen.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.globalCompositeOperation = "screen";
-  ctx.fillStyle = sheen;
-  ctx.fillRect(carX, carY, carW, carH);
-  ctx.globalCompositeOperation = "source-over";
-  ctx.restore();
-  ctx.restore();
-
-  drawCarAlignedDivider(ctx, carY, carH, carCoverX, slant, stage.dividerT);
+  drawCarAlignedDivider(ctx, carY, carH, carCoverX, slant, dividerT);
   ctx.restore();
 }
 
@@ -538,7 +527,6 @@ function drawAbstractCarPanel(ctx: CanvasRenderingContext2D, stage: StageRect) {
   ctx.beginPath();
   ctx.rect(px, py, coverX - px, ph);
   ctx.clip();
-
   const sheen = ctx.createLinearGradient(px, py, px + pw, py + ph);
   sheen.addColorStop(0, "#3a3b3d");
   sheen.addColorStop(0.42, "#111113");
@@ -553,19 +541,78 @@ function drawAbstractCarPanel(ctx: CanvasRenderingContext2D, stage: StageRect) {
   ctx.restore();
 }
 
-function drawSparkles(ctx: CanvasRenderingContext2D, w: number, h: number, intensity: number, frame: number) {
+function drawCarPanel(ctx: CanvasRenderingContext2D, params: CarParams) {
+  const { w, h, scale, coverage, applicator, dividerT } = params;
+  const pad = w * (1 - scale) * 0.5;
+  const stage: StageRect = {
+    px: -pad,
+    py: h * 0.08 - pad * 0.4,
+    pw: w + pad * 2,
+    ph: h * 0.86 + pad * 0.8,
+    coverX: -pad + (w + pad * 2) * coverage,
+    coverage,
+    dividerT,
+  };
+
+  const carImg = photo(CAR_PHOTO);
+  if (carImg) {
+    drawRealCarPanel(ctx, carImg, stage);
+  } else {
+    drawAbstractCarPanel(ctx, stage);
+  }
+
+  // The jar itself rides the wipe — the product doing the work, rather than a
+  // stand-in applicator shape.
+  if (applicator.visible > 0.02) {
+    const poteImg = photo(POTE_PHOTO);
+    const rect = carImg ? carRect(carImg, stage) : null;
+    const cx = stage.px + applicator.x * stage.pw;
+    const cy = rect ? rect.carY + rect.carH * 0.26 : stage.py + stage.ph * 0.45;
+    const size = (rect ? rect.carH : stage.ph) * 0.34;
+
+    ctx.save();
+    ctx.globalAlpha = ctx.globalAlpha * applicator.visible;
+    if (poteImg) {
+      drawProductPhoto(ctx, poteImg, {
+        cx,
+        cy,
+        height: size,
+        tilt: -0.07,
+        sweep: 0.5,
+        sweepStrength: 0.55,
+        glow: 1,
+      });
+    } else {
+      drawProductGlow(ctx, cx, cy, size);
+    }
+    ctx.restore();
+  }
+}
+
+/* ------------------------------------------------------------------ sparkle */
+
+function drawSparkles(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  intensity: number,
+  frame: number
+) {
   if (intensity <= 0.02) return;
+  const base = ctx.globalAlpha;
   for (let i = 0; i < SPARKLE.length; i++) {
     const s = SPARKLE[i];
     const pulse = 0.5 + 0.5 * Math.sin(frame * 0.12 + i * 1.7);
-    ctx.globalAlpha = intensity * pulse * 0.7;
+    ctx.globalAlpha = base * intensity * pulse * 0.7;
     ctx.beginPath();
     ctx.arc(s.x * w, s.y * h * 0.7 + h * 0.15, s.r * 1.8, 0, Math.PI * 2);
     ctx.fillStyle = INK.silverLight;
     ctx.fill();
   }
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = base;
 }
+
+/* -------------------------------------------------------------- the whole frame */
 
 export function drawPlaceholderFrame(
   ctx: CanvasRenderingContext2D,
@@ -575,15 +622,20 @@ export function drawPlaceholderFrame(
 ) {
   const P = frameP(frameOneBased);
 
-  drawBackdrop(ctx, width, height, P);
+  drawBackdrop(ctx, width, height);
 
   const midTransition = lerp(BP.spongeEnd, BP.transitionEnd, 0.5);
+
+  // the car hands the frame back to the jar early in the final beat, so the
+  // two are never both half-visible on top of each other
+  const finalHandover = lerp(BP.beforeAfterEnd, 1, 0.32);
 
   const productOpacity = keyframes(P, [
     [0, 1],
     [BP.spongeEnd, 1],
     [midTransition, 0],
     [BP.beforeAfterEnd, 0],
+    [finalHandover, 1],
     [1, 1],
   ]);
 
@@ -591,11 +643,11 @@ export function drawPlaceholderFrame(
     [BP.spongeEnd, 0],
     [midTransition, 1],
     [BP.beforeAfterEnd, 1],
+    [finalHandover, 0],
     [1, 0],
   ]);
 
   if (carOpacity > 0.01) {
-    const transitionT = remap(P, BP.spongeEnd, BP.transitionEnd);
     const carScale = keyframes(P, [
       [BP.spongeEnd, 1.55],
       [BP.transitionEnd, 1],
@@ -610,14 +662,13 @@ export function drawPlaceholderFrame(
 
     const t1 = lerp(BP.transitionEnd, BP.applicationEnd, 0.15);
     const t2 = lerp(BP.applicationEnd, BP.shineEnd, 0.85);
-    const spongeVisible = keyframes(P, [
+    const applicatorVisible = keyframes(P, [
       [BP.transitionEnd, 0],
       [t1, 1],
       [t2, 1],
       [BP.shineEnd, 0],
     ]);
     const wobble = Math.sin(P * 90) * 0.025;
-    const spongeX = clamp01(coverage + wobble);
 
     const dividerT = keyframes(P, [
       [BP.shineEnd, 0],
@@ -628,70 +679,108 @@ export function drawPlaceholderFrame(
     ctx.save();
     ctx.globalAlpha = carOpacity;
     drawCarPanel(ctx, {
-      p: P,
       w: width,
       h: height,
       scale: carScale,
       coverage,
-      sponge: { visible: spongeVisible, x: spongeX },
+      applicator: { visible: applicatorVisible, x: clamp01(coverage + wobble) },
       dividerT,
     });
-    drawSparkles(ctx, width, height, remap(P, BP.applicationEnd, BP.shineEnd) * carOpacity, frameOneBased);
+    drawSparkles(
+      ctx,
+      width,
+      height,
+      remap(P, BP.applicationEnd, BP.shineEnd) * carOpacity,
+      frameOneBased
+    );
     ctx.restore();
-    void transitionT;
   }
 
   if (productOpacity > 0.01) {
     const isFinal = P >= BP.beforeAfterEnd;
+    const finalT = isFinal ? remap(P, BP.beforeAfterEnd, 1) : 0;
 
-    const jarScale = keyframes(P, [
-      [0, 0.8],
-      [BP.closedEnd, 0.92],
-      [BP.lidEnd, 1.02],
-      [BP.pasteEnd, 1.22],
-      [BP.spongeEnd, 1.14],
-      [1, 1.02],
+    // The opening height matches the hero photo above, so the scroll picks the
+    // jar up exactly where the page handed it over and pushes in from there.
+    const heightFrac = keyframes(P, [
+      [0, 0.34],
+      [BP.closedEnd, 0.4],
+      [BP.lidEnd, 0.5],
+      [BP.pasteEnd, 0.62],
+      [BP.spongeEnd, 0.56],
+      [midTransition, 0.86],
+      [BP.beforeAfterEnd, 0.3],
+      [1, 0.4],
     ]);
 
-    const lidLift = keyframes(P, [
-      [0, 0],
-      [BP.closedEnd, 0],
-      [BP.lidEnd, 1],
+    const cyFrac = keyframes(P, [
+      [0, 0.52],
+      [BP.pasteEnd, 0.5],
+      [midTransition, 0.48],
+      [BP.beforeAfterEnd, 0.44],
+      [1, 0.4],
+    ]);
+
+    const tilt = keyframes(P, [
+      [0, -0.02],
+      [BP.lidEnd, 0.015],
+      [BP.spongeEnd, -0.01],
+      [1, 0],
+    ]);
+
+    const sweep = keyframes(P, [
+      [0, 0.06],
+      [BP.pasteEnd, 0.55],
+      [BP.spongeEnd, 0.92],
+      [BP.beforeAfterEnd, 0.1],
+      [1, 0.6],
+    ]);
+
+    const sweepStrength = keyframes(P, [
+      [0, 0.25],
+      [BP.closedEnd, 0.5],
+      [BP.pasteEnd, 1],
+      [BP.spongeEnd, 0.7],
+      [BP.beforeAfterEnd, 0.6],
       [1, 1],
     ]);
 
-    const pasteReveal = keyframes(P, [
-      [BP.closedEnd, 0],
-      [BP.lidEnd, 0.45],
+    const glow = keyframes(P, [
+      [0, 0.35],
+      [BP.lidEnd, 0.7],
       [BP.pasteEnd, 1],
-      [BP.spongeEnd, 0.82],
-      [1, 0.92],
+      [BP.spongeEnd, 0.85],
+      [BP.beforeAfterEnd, 0.7],
+      [1, 1],
     ]);
 
-    const spongeAttach = keyframes(P, [
-      [BP.pasteEnd, 0],
-      [BP.spongeEnd, 1],
-      [BP.transitionEnd, 0],
-    ]);
-
-    const lidBesideT = isFinal ? remap(P, BP.beforeAfterEnd, 1) : 0;
-    const finalT = isFinal ? remap(P, BP.beforeAfterEnd, 1) : 0;
-    const cyFrac = lerp(0.6, 0.4, smoothstep(finalT));
+    const cx = width / 2;
+    const cy = height * cyFrac;
+    const shotHeight = height * heightFrac * lerp(1, 1.04, smoothstep(finalT));
+    const poteImg = photo(POTE_PHOTO);
 
     ctx.save();
     ctx.globalAlpha = productOpacity;
-    drawJarGroup(ctx, {
-      cx: width / 2,
-      cy: height * cyFrac,
-      scale: jarScale * lerp(1, 0.82, smoothstep(finalT)),
-      lidLift,
-      lidWobble: P * 26,
-      lidBesideT,
-      pasteReveal,
-      spongeAttach,
-      unit: Math.min(width, height) * 0.19,
-    });
-    drawSparkles(ctx, width, height, isFinal ? remap(P, BP.beforeAfterEnd, 1) * 0.6 : 0, frameOneBased);
+    if (poteImg) {
+      drawProductPhoto(ctx, poteImg, {
+        cx,
+        cy,
+        height: shotHeight,
+        tilt,
+        sweep,
+        sweepStrength,
+        glow,
+      });
+    } else {
+      drawProductGlow(ctx, cx, cy, shotHeight);
+    }
+    drawSparkles(
+      ctx,
+      width,
+      height,
+      isFinal ? finalT * 0.6 : remap(P, BP.closedEnd, BP.pasteEnd) * 0.3,
+      frameOneBased
+    );
     ctx.restore();
   }
 }

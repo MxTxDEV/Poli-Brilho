@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { drawImageCover, fitCanvasToElement } from "@/lib/canvas-utils";
-import { drawPlaceholderFrame } from "@/lib/placeholder-scene";
+import { drawPlaceholderFrame, onPhotoLoad } from "@/lib/placeholder-scene";
 import { useFrameSequenceContext } from "@/components/FrameSequenceProvider";
 
 /**
@@ -61,6 +61,10 @@ export function useFrameCanvas(canvasRef: RefObject<HTMLCanvasElement | null>) {
   useEffect(() => {
     renderFrame(lastFrame.current);
   }, [mode, renderFrame]);
+
+  // The scene's own product photography loads asynchronously too, and frames
+  // are otherwise only drawn on scroll — repaint as soon as one arrives.
+  useEffect(() => onPhotoLoad(() => renderFrame(lastFrame.current)), [renderFrame]);
 
   return renderFrame;
 }
